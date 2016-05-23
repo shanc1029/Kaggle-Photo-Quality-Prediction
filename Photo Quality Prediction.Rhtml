@@ -1,0 +1,198 @@
+<html>
+
+<head>
+<title>GLM on Text Sparse Matrix</title>
+<style>
+body {  
+      width:800px;
+      background-color: white;
+      margin-left: auto;
+      margin-right:auto;
+      padding:5px;
+     }
+</style>
+</head>
+
+<body>
+<h1><ins>GLM on Text Sparse Matrix</ins></h1>
+<p style="font-family:courier;font-size:110%;">Shan Chen<br>
+Jan 2016</p>
+<p>This file records the thought process of predicting people's review of albums with information such as dimension of photos and words used in photo cation. It will basically contain three parts:<br>
+1. EDA<br>
+2. 1 gram Vectorization and Sparse Matrix Generation<br>
+3. GLMNET Modeling and Validation<br>
+4. Prediction and Submission</p>
+<h1>1. EDA</h1>
+<p> Loading packages and data set</p>
+<!--begin.rcode
+library('knitr')
+library('ggplot2')
+library('gridExtra')
+library('sqldf')
+library('dplyr')
+library('stringi')
+library('Matrix')
+library('glmnet')
+train<-read.csv("C:\\Users\\Shan\\Desktop\\Photo Quality Prediction\\training.csv")
+end.rcode-->
+<h2>1.1 Non-text Features Visualization</h2>
+<p>Converting "good" data type from int to factor
+<!--begin.rcode
+train$good <- as.factor(train$good)
+end.rcode-->
+<p>Boxplots:</p>
+<!--begin.rcode
+g1=ggplot(train, aes(x=good, y=latitude)) + geom_boxplot()
+g2=ggplot(train, aes(x=good, y=longitude)) + geom_boxplot()
+g3=ggplot(train, aes(x=good, y=width)) + geom_boxplot()
+g4=ggplot(train, aes(x=good, y=height)) + geom_boxplot()
+g5=ggplot(train, aes(x=good, y=size)) + geom_boxplot()
+a=grid.arrange( g1,g2,g3,g4,g5, nrow=3,ncol=2)
+end.rcode-->
+<p>Density plots:</p>
+<!--begin.rcode
+g1=ggplot(train, aes(x=latitude, color=good)) + geom_density()
+g2=ggplot(train, aes(x=longitude, color=good)) + geom_density()
+g3=ggplot(train, aes(x=width, color=good)) + geom_density()
+g4=ggplot(train, aes(x=height, color=good)) + geom_density()
+g5=ggplot(train, aes(x = size,color=good)) + geom_density()
+a=grid.arrange( g1,g2,g3,g4,g5, nrow=3,ncol=2)
+end.rcode-->
+<p>From above plots, it looks like the distribution of non-text variable for both good and not good albums are similar, it may mean that, in terms of latitude variable, for a given latitude area, it is hard to judge if the album would be viewed good or not only through the latitude effect. This is possible due to lack of other vital variables, e.g., longitude, size, text information, or it's simply because there is no obvious linear relationship between latitude and goodness of albums which might make sense if it's the situation that any negative and positive latitude area  both have good albums and bad albums (lack of other more specific information).</p>
+<h2>1.2 Logistic GLM to only Non-text Features</h2>
+<p>In order to address our guess of lack of other important features, we first add all the non-text features into a glm model (since response variable--good has two values).<br>
+Just out of curiousity, I would like to know if glm model would perform well if I only used non-text predictors.</p>
+<!--begin.rcode
+#subset only non-text information out of train date set
+train<-train[,c(1:6,10)]
+fit1 <- glm(good ~latitude+longitude+width+height+size , family = "binomial", data=train)
+summary(fit1)
+end.rcode-->
+<p>It seems all variables except for height are significant predictors for goodness of albums meaning that glm kind of addressed our feature linearity problem once we add more others features in.</p>
+<p>Calculate in-sample error rate</p>
+<p>Error rate</p>
+<!--begin.rcode
+train.predict <- predict(fit1,type = "response")
+predict.good <- ifelse(train.predict >= 0.50, 1,0)
+predict.match <- ifelse(predict.good == train$good,1,0)
+correct_rate_insample<-sum(predict.match)/nrow(train) 
+error_rate_insample <- 1-correct_rate_insample
+error_rate_insample
+end.rcode-->
+<p>Error rate is 0.2635736 which is kinda low, then I consider adding the text information and conduct a glmnet model to deal with text variable.</p>
+<h1>2. 1 gram Vectorization and Sparse Matrix Generation</h1>
+<h2>2.1 Why Need Text Information</h2>
+<!--begin.rcode
+train<-read.csv("C:\\Users\\Shan\\Desktop\\Photo Quality Prediction\\training.csv")
+test<-read.csv("C:\\Users\\Shan\\Desktop\\Photo Quality Prediction\\test.csv")
+complete <-bind_rows(train, test)# Union the data together vertically
+head(complete)
+end.rcode-->
+<p>Our interests is to find out which words in name, description and caption of an album would tend to give a satisfying quality result and which ones would not, in order to address such a problem, I first extract out all of the words in those three columns to generate quite a lot new word tokens features(1-gram, only one word), and fill in the cell with 1 if the album contains the corresponding word and 0 if not.</p>
+<h2>2.2 R Functions for Sparse Matrix Generation</h2>
+<p>I use the below R functions to generate such a <b>large sparse matrix</b>.</p>
+<!--begin.rcode
+name<-complete$name
+description<-complete$description
+caption<-complete$caption
+ 
+#1 gram Vectorization
+tokens <- stri_split_fixed(name, ' ')
+token_vector <- unlist(tokens)
+bagofwords_name <- unique(token_vector)
+n_tokens <- sapply(tokens, length)
+i <- rep(seq_along(n_tokens), n_tokens)
+j <- match(token_vector, bagofwords_name)
+sparsematrix_name <- sparseMatrix(i=i, j=j, x=1L)
+colnames(sparsematrix_name) <- paste(bagofwords_name,'in Name')
+
+tokens <- stri_split_fixed(description, ' ')
+token_vector <- unlist(tokens)
+bagofwords_description <- unique(token_vector)
+n_tokens <- sapply(tokens, length)
+i <- rep(seq_along(n_tokens), n_tokens)
+j <- match(token_vector, bagofwords_description)
+sparsematrix_description <- sparseMatrix(i=i, j=j, x=1L)
+colnames(sparsematrix_description) <- paste(bagofwords_description,'in Description')
+
+tokens <- stri_split_fixed(caption, ' ')
+token_vector <- unlist(tokens)
+bagofwords_caption <- unique(token_vector)
+n_tokens <- sapply(tokens, length)
+i <- rep(seq_along(n_tokens), n_tokens)
+j <- match(token_vector, bagofwords_caption)
+sparsematrix_caption <- sparseMatrix(i=i, j=j, x=1L)
+colnames(sparsematrix_caption) <- paste(bagofwords_caption,'in Caption')
+#cbind three sparse matrix with other non-text columns
+x<-cbind(as.matrix(complete[,c(1:6)]),sparsematrix_name,sparsematrix_description,sparsematrix_caption)
+dim(x)#dimension is correct, x is the complete sparse matrix without the good column
+end.rcode-->
+<!--begin.rcode
+#have a look at a little piece of the matrix
+x[1:20,1:20]
+end.rcode-->
+<p>Now we have the sparse matrix that containing 6299 columns, we are finally ready to conduct a powerful GLMNET algorithm to this large sparse matrix.</p>
+<h1>3. GLMNET Modeling and Validation</h1>
+<p>Split x into two parts; one is train the other is test.</p>
+<!--begin.rcode
+x_train <- x[1:40262,]
+x_test <- x[40263:52262,]
+end.rcode-->
+<h2>3.1 GLMNET Modeling </h2>
+<!--begin.rcode
+fit2=glmnet(x_train,train$good,family="binomial")
+end.rcode-->
+<p>Use x_train data to predict train$good and then calculate in-sample error rate.</p>
+<!--begin.rcode
+train.predict <- predict(fit2,newx=x_train, s=0.001,type = "response")#s is the value of lambda
+predict.good <- ifelse(train.predict >= 0.50, 1,0)
+predict.match <- ifelse(predict.good == train$good,1,0)
+correct_rate_insample<-sum(predict.match)/nrow(train)
+error_rate_insample <- 1-correct_rate_insample
+error_rate_insample
+end.rcode-->
+<p>Error rate is 0.1717004 which is better than only using non-text information as predictors.</p>
+<h2>3.2 Cross Validation</h2>
+<p> We see that our model's performance has been improved after we take in text predictors, however I think we still need a bit more work on applying the model to some out-of sample and check the consistence of the model.
+<!--begin.rcode
+#cross validation (carve out x_train, the first 1 fouth of the x_train set is treated as the validation set)
+valid <- train[1:10000,]
+train <- train[10001:40262,]
+x_valid <- x_train[1:10000,]
+x_train <- x_train[10001:40262,]
+
+fit3=glmnet(x_train,train$good,family="binomial")
+end.rcode-->
+<p>Then predict out of sample error rate of valid data.</p>
+<!--begin.rcode
+valid.predict <- predict(fit3,newx=x_valid, s=0.001,type = "response")#s is the value of lambda
+predict.good <- ifelse(valid.predict >= 0.50, 1,0)
+predict.match <- ifelse(predict.good == valid$good,1,0)
+correct_rate_outofsample<-sum(predict.match)/nrow(valid)
+error_rate_outofsample <- 1-correct_rate_outofsample
+error_rate_outofsample
+end.rcode-->
+<p>Out of sample error rate is a bit higher than in sample's possibily due to the train sample size becomes smaller but is still lower than our first model (non-text model--fit1)'s error rate.</p>
+<h1>4. Prediction and Submission</h1>
+<h2>4.1 Prediction</h2>
+<p>Predict the x_test set using our fist whole x_train glmnet model--fit2</p>
+<!--begin.rcode
+test$predict <- predict(fit2,newx=x_test, s=0.001,type = "response")#s is the value of lambda
+test$predict.good <- ifelse(test$predict >= 0.50, 1,0)
+end.rcode-->
+<h2>4.2 Submission</h2>
+<p>Choose only two columns (id and prediction result) as our final entry; give column names and write to a CSV file.</p>
+<!--begin.rcode
+submission <- cbind(test$id,test$predict.good)
+colnames(submission) <-c("id",'good')
+write.csv(submission, file = 'submission.csv', row.names = F)
+end.rcode-->
+<p>Have a look at the format of our submission.</p>
+<!--begin.rcode
+head(submission)
+end.rcode-->
+<p>Later on I will work on some other feature engineering tools such as PCA and SVD, in order to reduce dimensionality of large sparse matrix to see if such model manipulation could lower a bit the error rate.
+</p>
+</body>
+
+</html>
