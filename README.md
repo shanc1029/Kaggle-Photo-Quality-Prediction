@@ -1,4 +1,4 @@
-This is a personal project, the idea and data sets come from Kaggle--Photo Quality Prediction 
+This is a personal project, the idea and data sets come from Kaggle--Photo Quality Prediction https://www.kaggle.com/c/PhotoQualityPrediction
 
 Given anonymized information on thousands of photo albums, predict whether a human evaluator would mark them as 'good'.
 
